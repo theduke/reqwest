@@ -26,7 +26,7 @@ use hyper::client::ResponseFuture;
 use mime;
 #[cfg(feature = "default-tls")]
 use native_tls::TlsConnector;
-
+use tokio::prelude::FutureExt;
 
 use super::request::{Request, RequestBuilder};
 use super::response::Response;
@@ -220,6 +220,9 @@ impl ClientBuilder {
                 proxies,
                 proxies_maybe_http_auth,
                 cookie_store,
+                timeout: config
+                .timeout
+                .unwrap_or_else(|| Duration::new(std::u64::MAX, 0)),
             }),
         })
     }
@@ -519,7 +522,16 @@ impl Client {
     /// This method fails if there was an error while sending request,
     /// redirect loop was detected or redirect limit was exhausted.
     pub fn execute(&self, request: Request) -> impl Future<Item = Response, Error = ::Error> {
+        let err_url = request.url().clone();
         self.execute_request(request)
+            .timeout(self.inner.timeout)
+            .map_err(move |err: tokio::timer::timeout::Error<::Error>| {
+                if let Some(inn_err) = err.into_inner() {
+                    inn_err
+                } else {
+                    ::error::timedout(Some(err_url))
+                }
+            })
     }
 
 
@@ -662,6 +674,7 @@ struct ClientRef {
     proxies: Arc<Vec<Proxy>>,
     proxies_maybe_http_auth: bool,
     cookie_store: Option<RwLock<cookie::CookieStore>>,
+    timeout: Duration,
 }
 
 pub struct Pending {
